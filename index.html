@@ -307,7 +307,7 @@
     </div>
   </div>
 
-  <footer>route → build → paste back → repeat · runs entirely in your browser · v1.1.1</footer>
+  <footer>route → build → paste back → repeat · runs entirely in your browser · v1.2.0</footer>
 </div>
 
 <script>
@@ -506,11 +506,11 @@ function planProject(raw, deliverableKey, fields){
   /* ---------- CODE PATH ---------- */
   if(workType === "code"){
     if(difficulty >= 1){
-      steps.push(step(
+      steps.push(Object.assign(step(
         "Scope it out before building",
         "Sonnet 5","Claude Chat","medium",
         "A quick, cheap planning pass in plain Chat clarifies the approach before you spend agent time writing code."
-      ));
+      ), {role:"plan"}));
     }
     if(difficulty === 2){
       steps.push(step(
@@ -539,11 +539,11 @@ function planProject(raw, deliverableKey, fields){
   /* ---------- DOCS / DATA PATH (Cowork) ---------- */
   else if(workType === "docs"){
     if(difficulty >= 1){
-      steps.push(step(
+      steps.push(Object.assign(step(
         "Design the structure first",
         "Sonnet 5","Claude Chat","medium",
         "Plain Chat is the cheapest place to nail down the layout — tabs, columns, how data should flow — before Cowork builds the file."
-      ));
+      ), {role:"plan"}));
     }
     const buildHard = difficulty === 2;
     steps.push(step(
@@ -600,6 +600,7 @@ function planProject(raw, deliverableKey, fields){
 
   const meta = {
     pick: userPick ? deliverableKey : (base ? base.pick : null),
+    nextApp: steps.length > 1 ? steps[steps.length-1].app : null,
     fields: fields || null,
     gapAsks: describeGaps(raw).map(g=>g.ask)
   };
@@ -684,6 +685,21 @@ const DELIVER_LINE = {
   webscrape:  "The working tool, how to run it, and what to do when the site changes and it breaks."
 };
 
+/* --- Deliver lines for PLANNING steps: the output is a design to hand
+   to the build step — explicitly not the built thing. --- */
+const PLAN_DELIVER = {
+  spreadsheet:"A written layout I can approve: every tab, its columns, and how data flows between them. Do NOT build the file yet \u2014 the next step does that in Cowork.",
+  deck:"A slide-by-slide outline I can approve: each slide's title and main point. Do NOT build the deck yet \u2014 the next step does that in Cowork.",
+  finmodel:"A written structure I can approve: the sheets, key assumptions, and how the numbers flow. Do NOT build the model yet \u2014 the next step does that in Cowork.",
+  _code:"A short written plan I can approve: the approach, the pieces to build, and anything to decide up front. Do NOT write the code yet \u2014 the next step does that in Claude Code.",
+  _default:"A written plan I can approve before anything gets built. Do NOT produce the final result yet \u2014 that's the next step."
+};
+function planDeliver(pick, nextApp){
+  if(PLAN_DELIVER[pick]) return PLAN_DELIVER[pick];
+  if(nextApp === "Claude Code") return PLAN_DELIVER._code;
+  return PLAN_DELIVER._default;
+}
+
 /* --- #4: how to work in each app — habits experienced users have. --- */
 const APP_PROCESS = {
   "Claude Code":"First propose a short plan and file structure and wait for my OK. Then write the code, explaining each part briefly. Finish by telling me exactly how to run and test it.",
@@ -709,8 +725,14 @@ function buildPrompt(project, s, ctx, meta){
     const bridge = ctx.issue
       ? `The previous step (${ctx.prevStep.model} in ${ctx.prevStep.app}) hit an issue. Here's what came back:\n"""\n${trimmed}\n"""\nPlease fix this and get it working before moving on.`
       : `In the previous step (${ctx.prevStep.model} in ${ctx.prevStep.app}), here's what came back:\n"""\n${trimmed}\n"""`;
+    const contDeliver = (s.role === "plan")
+      ? planDeliver(meta.pick, meta.nextApp)
+      : (DELIVER_LINE[meta.pick] || "The finished result, plus anything I should know to use or maintain it.");
+    const afterPlan = ctx.prevStep && ctx.prevStep.role === "plan" && !ctx.issue
+      ? " Follow the approved design above \u2014 if anything in it is ambiguous, ask me before deviating from it." : "";
     return setup + `\n\nI'm continuing this project: ${project.trim()}\n\n` + bridge +
-      `\n\nThis step: "${s.what}". ` + (APP_PROCESS[s.app] || "");
+      `\n\nTHIS STEP: "${s.what}". ` + (APP_PROCESS[s.app] || "") + afterPlan +
+      `\n\nDELIVER: ` + contDeliver;
   }
 
   /* Fresh prompt: structured sections. */
@@ -739,8 +761,13 @@ function buildPrompt(project, s, ctx, meta){
       "\nWait for my answers, then briefly confirm your plan before producing anything."
     : "Briefly confirm your plan with me before producing anything.";
 
-  const process = 'THIS STEP: "' + s.what + '". ' + (APP_PROCESS[s.app] || "");
-  const deliver = "DELIVER: " + (DELIVER_LINE[meta.pick] || "The finished result, plus anything I should know to use or maintain it.");
+  const isPlan = s.role === "plan";
+  const process = isPlan
+    ? 'THIS STEP: "' + s.what + '". This step is planning only \u2014 we design here, and a later step builds. Think it through with me and iterate until I approve the design.'
+    : 'THIS STEP: "' + s.what + '". ' + (APP_PROCESS[s.app] || "");
+  const deliver = "DELIVER: " + (isPlan
+    ? planDeliver(meta.pick, meta.nextApp)
+    : (DELIVER_LINE[meta.pick] || "The finished result, plus anything I should know to use or maintain it."));
 
   return setup + "\n\n" + lines.join("\n") + "\n\n" + askBlock + "\n\n" + process + "\n\n" + deliver;
 }
@@ -1193,8 +1220,16 @@ const PROMPT_CASES = [
    check:p=>p.includes("run and test")&&p.includes("/effort")},
   {name:"cowork prompt confirms file list", run:()=>{const r=planProject("a budget spreadsheet with monthly tabs","auto");return buildPrompt("x",r.steps[1],null,r.meta);},
    check:p=>p.includes("list the files you intend")||p.includes("List the files you intend")},
-  {name:"deliver line matches deliverable", run:()=>planProject("a slide deck to pitch investors","auto").prompt,
-   check:p=>p.includes("speaker notes")},
+  {name:"deck plan step delivers outline; build step delivers deck", run:()=>{const r=planProject("a slide deck to pitch investors","auto");
+    const plan=r.prompt, build=buildPrompt("x",r.steps[1],{previous:"Approved outline: 10 slides.",prevStep:r.steps[0],issue:false},r.meta);
+    return plan+"|||"+build;},
+   check:p=>{const[a,b]=p.split("|||");return a.includes("slide-by-slide outline")&&!a.includes("speaker notes")&&b.includes("speaker notes");}},
+  {name:"plan step delivers a design, not the file", run:()=>planProject("a budget spreadsheet with monthly tabs","auto").prompt,
+   check:p=>p.includes("Do NOT build the file yet")&&!p.includes("finished working file")},
+  {name:"build step still delivers the file", run:()=>{const r=planProject("a budget spreadsheet with monthly tabs","auto");return buildPrompt("x",r.steps[1],{previous:"Approved layout: 12 tabs.",prevStep:r.steps[0],issue:false},r.meta);},
+   check:p=>p.includes("finished working file")&&p.includes("Follow the approved design")},
+  {name:"code scope step forbids writing code", run:()=>planProject("build a full app with a whole codebase end to end","auto").prompt,
+   check:p=>p.includes("Do NOT write the code yet")},
   {name:"continuation keeps context + process", run:()=>{const r=planProject("a budget spreadsheet with monthly tabs","auto");return buildPrompt("proj",r.steps[1],{previous:"Here is the layout: 12 tabs plus rollup.",prevStep:r.steps[0],issue:false},r.meta);},
    check:p=>p.includes("continuing this project")&&p.includes("12 tabs")&&p.includes("confirm the plan")}
 ];
