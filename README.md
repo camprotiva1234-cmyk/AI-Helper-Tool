@@ -5,7 +5,7 @@ A free, single-file tool that routes any project to the right Claude model
 Claude Code — the right /effort level, then writes the paste-ready prompt.
 Runs entirely in the browser: no server, no API key, no account.
 
-**Live site:** https://YOUR-USERNAME.github.io/claude-build-planner/
+**Live site:** https://camprotiva1234-cmyk.github.io/AI-Helper-Tool/?v=1
 
 ## Testing
 Append `?test` to the URL to run the built-in regression suite.
