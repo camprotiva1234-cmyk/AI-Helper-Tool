@@ -307,7 +307,7 @@
     </div>
   </div>
 
-  <footer>route → build → paste back → repeat · runs entirely in your browser · v1.2.0</footer>
+  <footer>route → build → paste back → repeat · runs entirely in your browser · v1.3.0</footer>
 </div>
 
 <script>
@@ -536,31 +536,46 @@ function planProject(raw, deliverableKey, fields){
       : "Head to Claude Code and let Sonnet build it — Chat first if you want to plan the approach.";
   }
 
-  /* ---------- DOCS / DATA PATH (Cowork) ---------- */
+  /* ---------- DOCS / DATA PATH ----------
+     Chat can create real downloadable .xlsx/.pptx/.docx files (free tier
+     included), so Cowork is only worth its install + paid plan when the
+     job is heavy (tier 2) or works across EXISTING files on the user's
+     computer — the thing Chat genuinely can't do. */
   else if(workType === "docs"){
-    if(difficulty >= 1){
+    const localFiles = /(my (existing )?(files|spreadsheet|workbook|doc|deck|presentation)s?\b|files on my computer|existing (file|spreadsheet|workbook|doc|deck|version)|update (my|our|the) (spreadsheet|workbook|file|doc|deck)|edit my)/.test(text)
+      || !!(fields && fields.start && fields.start.includes("files on my computer"));
+    const needsCowork = difficulty === 2 || localFiles;
+
+    if(!needsCowork){
+      steps.push(step(
+        "Design and build it",
+        "Sonnet 5","Claude Chat","medium",
+        "Chat can create real downloadable spreadsheet/doc/deck files — free tier included — so for a standard from-scratch build it's the cheapest route: agree the layout and get the finished file in one conversation."
+      ));
+      summary = "One stop: Sonnet in plain Chat can design it with you and hand back the actual downloadable file.";
+    } else {
       steps.push(Object.assign(step(
         "Design the structure first",
         "Sonnet 5","Claude Chat","medium",
         "Plain Chat is the cheapest place to nail down the layout — tabs, columns, how data should flow — before Cowork builds the file."
       ), {role:"plan"}));
+      const buildHard = difficulty === 2;
+      steps.push(step(
+        buildHard ? "Build the file end-to-end" : "Build it",
+        buildHard ? "Opus 4.8" : "Sonnet 5",
+        "Claude Cowork",
+        buildHard ? "high" : "medium",
+        buildHard
+          ? "A multi-sheet model with formulas flowing across tabs is dense enough to justify Opus; Cowork produces the real working file, not a description of it."
+          : "This job works across existing files on your computer — that's Cowork's home turf; Chat can't reach into your folders."
+      ));
+      summary = buildHard
+        ? "Sketch the structure in Chat, then let Opus build the working file in Cowork."
+        : "Sketch the structure in Chat, then let Cowork build it — it can work directly in your existing files, which Chat can't.";
     }
-    const buildHard = difficulty === 2;
-    steps.push(step(
-      buildHard ? "Build the file end-to-end" : "Build it",
-      buildHard ? "Opus 4.8" : "Sonnet 5",
-      "Claude Cowork",
-      buildHard ? "high" : "medium",
-      buildHard
-        ? "A multi-sheet model with formulas flowing across tabs is dense enough to justify Opus; Cowork produces the real working file, not a description of it."
-        : "Cowork works directly in your files and returns a finished spreadsheet/doc/deck with working formulas — Sonnet at medium effort handles this economically."
-    ));
-    summary = buildHard
-      ? "Sketch the structure in Chat, then let Opus build the working file in Cowork."
-      : "Let Sonnet build it in Cowork — it works in your files and hands back the finished thing.";
   }
 
-  /* ---------- RESEARCH / WRITING / THINKING PATH ---------- */
+    /* ---------- RESEARCH / WRITING / THINKING PATH ---------- */
   else if(workType === "research"){
     if(difficulty === 0){
       steps.push(step(
@@ -762,8 +777,11 @@ function buildPrompt(project, s, ctx, meta){
     : "Briefly confirm your plan with me before producing anything.";
 
   const isPlan = s.role === "plan";
+  const chatFileBuild = s.app === "Claude Chat" && !isPlan && ["spreadsheet","deck","finmodel"].includes(meta.pick);
   const process = isPlan
     ? 'THIS STEP: "' + s.what + '". This step is planning only \u2014 we design here, and a later step builds. Think it through with me and iterate until I approve the design.'
+    : chatFileBuild
+    ? 'THIS STEP: "' + s.what + '". Once I confirm the layout, create the actual downloadable file right here in this chat (you can generate real spreadsheet/document/presentation files).'
     : 'THIS STEP: "' + s.what + '". ' + (APP_PROCESS[s.app] || "");
   const deliver = "DELIVER: " + (isPlan
     ? planDeliver(meta.pick, meta.nextApp)
@@ -976,7 +994,7 @@ function helpFor(app, model){
     '<li>Start a new chat.</li>'+
     '<li>Click the small <b>model name</b> shown near the message box and pick <b>'+esc(model)+'</b> from the dropdown.</li>'+
     '<li>Paste the prompt below into the message box and press Enter.</li><li>Claude will reply with a few questions before building anything \u2014 <b>that\'s on purpose</b>. Answer them in the same conversation and it will confirm a plan, then produce the result.</li></ol>'+
-    '<p class="fyi">Good news: the free plan includes Sonnet — so Chat steps on this route cost nothing. Opus requires a paid plan; if it\'s not listed, use the best model available.</p>';
+    '<p class="fyi">Good news: the free plan includes Sonnet — so Chat steps on this route cost nothing. Chat can also create real downloadable files (spreadsheets, decks, docs); if it says it can\'t, turn on \u201cUpgraded file creation and analysis\u201d in Settings \u2192 Features. Opus requires a paid plan; if it\'s not listed, use the best model available.</p>';
 }
 
 function showNudge(html){
@@ -1186,7 +1204,8 @@ const TEST_CASES = [
   {name:"summary", text:"summarize this meeting transcript into a list of action items", exp:{model:"Haiku 4.5", app:"Claude Chat", effort:"low"}},
   // -- tier 1 standard --
   {name:"blog post", text:"write a blog article about composting for beginners", exp:{model:"Sonnet 5", app:"Claude Chat", effort:"medium"}},
-  {name:"budget spreadsheet", text:"build a budget spreadsheet with monthly tabs and a rollup", exp:{model:"Sonnet 5", app:"Claude Cowork"}},
+  {name:"budget spreadsheet from scratch builds in Chat", text:"build a budget spreadsheet with monthly tabs and a rollup", exp:{model:"Sonnet 5", app:"Claude Chat"}},
+  {name:"existing local files route to Cowork", text:"update my existing spreadsheet files with a monthly rollup tab", exp:{model:"Sonnet 5", app:"Claude Cowork"}},
   {name:"small script", text:"a script that renames files in a folder by date", exp:{model:"Sonnet 5", app:"Claude Code"}},
   {name:"web scraper", text:"a web scraper that pulls product prices from a site nightly", exp:{model:"Sonnet 5", app:"Claude Code"}},
   // -- tier 2 heavy --
@@ -1197,7 +1216,7 @@ const TEST_CASES = [
   {name:"same-type co-occurrence stays quiet", text:"build a full app with a whole codebase and a small script for deploys", expFn:r=>!r.clarifyNote},
   {name:"cross-type co-occurrence warns", text:"a script that generates an excel workbook every week", expFn:r=>r.clarifyNote.includes("more than one deliverable")},
   // -- negation of adjectives --
-  {name:"negated fancy", text:"a budget spreadsheet, nothing fancy, not complicated", exp:{app:"Claude Cowork", model:"Sonnet 5"}},
+  {name:"negated fancy", text:"a budget spreadsheet, nothing fancy, not complicated", exp:{app:"Claude Chat", model:"Sonnet 5"}},
   // -- adjectives alone must not flip tier --
   {name:"'simple' codebase stays heavy", text:"a simple full app with a whole codebase", exp:{model:"Opus 4.8"}},
   {name:"'complex' email stays light", text:"a complex email to a client", exp:{model:"Haiku 4.5"}},
@@ -1218,19 +1237,23 @@ const PROMPT_CASES = [
    check:p=>p.includes("FOR: my accountant")&&p.includes("REQUIREMENTS: monthly view")&&!p.includes("ask me what the result must include")},
   {name:"code prompt has run/test habit", run:()=>{const r=planProject("build a full app with a whole codebase end to end","auto");return buildPrompt("x",r.steps[1],null,r.meta);},
    check:p=>p.includes("run and test")&&p.includes("/effort")},
-  {name:"cowork prompt confirms file list", run:()=>{const r=planProject("a budget spreadsheet with monthly tabs","auto");return buildPrompt("x",r.steps[1],null,r.meta);},
+  {name:"cowork prompt confirms file list", run:()=>{const r=planProject("update my existing spreadsheet files with monthly tabs","auto");return buildPrompt("x",r.steps[1],null,r.meta);},
    check:p=>p.includes("list the files you intend")||p.includes("List the files you intend")},
-  {name:"deck plan step delivers outline; build step delivers deck", run:()=>{const r=planProject("a slide deck to pitch investors","auto");
-    const plan=r.prompt, build=buildPrompt("x",r.steps[1],{previous:"Approved outline: 10 slides.",prevStep:r.steps[0],issue:false},r.meta);
+  {name:"from-scratch deck builds in chat with deck deliver line", run:()=>planProject("a slide deck to pitch investors","auto").prompt,
+   check:p=>p.includes("speaker notes")&&p.includes("downloadable file right here")},
+  {name:"finmodel plan/build pair keeps roles", run:()=>{const r=planProject("a three-statement financial model with a DCF valuation","auto");
+    const plan=r.prompt, build=buildPrompt("x",r.steps[1],{previous:"Approved structure.",prevStep:r.steps[0],issue:false},r.meta);
     return plan+"|||"+build;},
-   check:p=>{const[a,b]=p.split("|||");return a.includes("slide-by-slide outline")&&!a.includes("speaker notes")&&b.includes("speaker notes");}},
-  {name:"plan step delivers a design, not the file", run:()=>planProject("a budget spreadsheet with monthly tabs","auto").prompt,
+   check:p=>{const[a,b]=p.split("|||");return a.includes("Do NOT build the model yet")&&b.includes("finished working model")&&b.includes("Follow the approved design");}},
+  {name:"chat docs build is one step that creates the file", run:()=>{const r=planProject("a budget spreadsheet with monthly tabs","auto");return r.steps.length+"|||"+r.prompt;},
+   check:p=>{const[n,pr]=p.split("|||");return n==="1"&&pr.includes("downloadable file right here")&&pr.includes("finished working file");}},
+  {name:"plan step delivers a design, not the file", run:()=>planProject("update my existing spreadsheet files with monthly tabs","auto").prompt,
    check:p=>p.includes("Do NOT build the file yet")&&!p.includes("finished working file")},
-  {name:"build step still delivers the file", run:()=>{const r=planProject("a budget spreadsheet with monthly tabs","auto");return buildPrompt("x",r.steps[1],{previous:"Approved layout: 12 tabs.",prevStep:r.steps[0],issue:false},r.meta);},
+  {name:"build step still delivers the file", run:()=>{const r=planProject("update my existing spreadsheet files with monthly tabs","auto");return buildPrompt("x",r.steps[1],{previous:"Approved layout: 12 tabs.",prevStep:r.steps[0],issue:false},r.meta);},
    check:p=>p.includes("finished working file")&&p.includes("Follow the approved design")},
   {name:"code scope step forbids writing code", run:()=>planProject("build a full app with a whole codebase end to end","auto").prompt,
    check:p=>p.includes("Do NOT write the code yet")},
-  {name:"continuation keeps context + process", run:()=>{const r=planProject("a budget spreadsheet with monthly tabs","auto");return buildPrompt("proj",r.steps[1],{previous:"Here is the layout: 12 tabs plus rollup.",prevStep:r.steps[0],issue:false},r.meta);},
+  {name:"continuation keeps context + process", run:()=>{const r=planProject("update my existing spreadsheet files with monthly tabs","auto");return buildPrompt("proj",r.steps[1],{previous:"Here is the layout: 12 tabs plus rollup.",prevStep:r.steps[0],issue:false},r.meta);},
    check:p=>p.includes("continuing this project")&&p.includes("12 tabs")&&p.includes("confirm the plan")}
 ];
 
